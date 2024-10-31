@@ -1,0 +1,123 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AWS CloudFormation Template to create an admin user with AdministratorAccess,
+  limited by a permissions boundary that enforces necessary restrictions.
+
+Parameters:
+  AdminUserName:
+    Type: String
+    Default: AdminUser
+    Description: Name of the IAM administrator user.
+  
+  BoundaryPolicyName:
+    Type: String
+    Default: PermissionsBoundaryPolicy
+    Description: Name of the IAM permissions boundary policy.
+
+Resources:
+  # Permissions Boundary Policy
+  PermissionsBoundaryPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Ref BoundaryPolicyName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Allow specified services and actions
+          - Sid: AllowSpecifiedActions
+            Effect: Allow
+            Action:
+              - 'iam:*'
+              - 'ec2:*'
+              - 's3:*'
+              - 'cloudtrail:*'
+            Resource: '*'
+
+          # Deny modifying own permissions boundary and policies
+          - Sid: DenyModifyingOwnPermissionsAndBoundary
+            Effect: Deny
+            Action:
+              - 'iam:PutUserPermissionsBoundary'
+              - 'iam:DeleteUserPermissionsBoundary'
+              - 'iam:AttachUserPolicy'
+              - 'iam:DetachUserPolicy'
+              - 'iam:PutUserPolicy'
+              - 'iam:DeleteUserPolicy'
+            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:user/${!aws:username}'
+
+          # Deny modifying any policies with this specific name
+          - Sid: DenyModifyingPermissionsBoundaryPolicy
+            Effect: Deny
+            Action:
+              - 'iam:DeletePolicy'
+              - 'iam:UpdatePolicy'
+              - 'iam:CreatePolicyVersion'
+              - 'iam:DeletePolicyVersion'
+              - 'iam:SetDefaultPolicyVersion'
+            Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/${BoundaryPolicyName}'
+
+          # Deny creating users or roles without a permissions boundary
+          - Sid: DenyCreatingUsersRolesWithoutBoundary
+            Effect: Deny
+            Action:
+              - 'iam:CreateUser'
+              - 'iam:CreateRole'
+            Resource: '*'
+            Condition:
+              StringNotEquals:
+                'iam:PermissionsBoundary': !Sub 'arn:aws:iam::${AWS::AccountId}:policy/${BoundaryPolicyName}'
+
+          # Deny changing permissions boundary on users or roles to a different one
+          - Sid: DenyChangingPermissionsBoundaryOnUsersRoles
+            Effect: Deny
+            Action:
+              - 'iam:PutUserPermissionsBoundary'
+              - 'iam:PutRolePermissionsBoundary'
+            Resource: '*'
+            Condition:
+              StringNotEquals:
+                'iam:PermissionsBoundary': !Sub 'arn:aws:iam::${AWS::AccountId}:policy/${BoundaryPolicyName}'
+
+          # Deny deleting permissions boundary from users or roles unconditionally.
+          # We cannot use the condition key here since it is not present in the request parameters.
+          # This means a policy of preventing any boundaries from being removed is required.
+          - Sid: DenyDeletingPermissionsBoundaryFromUsersRoles
+            Effect: Deny
+            Action:
+              - 'iam:DeleteUserPermissionsBoundary'
+              - 'iam:DeleteRolePermissionsBoundary'
+            Resource: '*'
+
+          # Deny modifying policies attached to oneself
+          - Sid: DenyModifyingPoliciesAttachedToSelf
+            Effect: Deny
+            Action:
+              - 'iam:DetachUserPolicy'
+              - 'iam:DeleteUserPolicy'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'aws:PrincipalArn': '${!aws:ResourceArn}'
+
+
+  # Administrator User
+  AdminUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Ref AdminUserName
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      PermissionsBoundary: !Ref PermissionsBoundaryPolicy
+
+Outputs:
+  AdminUserName:
+    Description: The name of the administrator user created.
+    Value: !Ref AdminUser
+
+  BoundaryPolicyArn:
+    Description: The ARN of the permissions boundary policy.
+    Value: !Ref PermissionsBoundaryPolicy
+
+  AdminUserArn:
+    Description: The ARN of the administrator user created.
+    Value: !GetAtt AdminUser.Arn
